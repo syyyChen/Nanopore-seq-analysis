@@ -155,7 +155,7 @@ def collect_config_statistics(vs_result, output_dir):
     config_counts.write_csv(os.path.join(output_dir, 'config_stat.csv'))
 
 
-def find_valid_pairs_optimized(vs_result):
+def find_valid_pairs(vs_result):
     print("Finding valid pairs...")
     # Create shifted columns for targets and positions
     vs_result = vs_result.select(
@@ -195,14 +195,15 @@ def find_valid_pairs_optimized(vs_result):
     return valid_pairs_dict
 
 
-def extract_reads(input_bam, valid_pairs_dict, output_dir):
-    """Extract reads from the bam file. Maintain all other information."""
+def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
+    """Extract reads from the bam file with batch writing."""
     print("Extracting reads...")
     n_reads = 0
     output_bam = os.path.join(output_dir, "extracted_reads.bam")
+
     with pysam.AlignmentFile(input_bam, "rb", check_sq=False) as bamfile:    
         with pysam.AlignmentFile(output_bam, "wb", header=bamfile.header) as outfile:
-            
+            batch = []
             for read in bamfile.fetch(until_eof=True):
                 query_name = read.query_name
                 if query_name in valid_pairs_dict:
@@ -211,11 +212,20 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir):
                         new_read.query_name = f"{query_name}_{idx}"
                         new_read.flag = read.flag
                         new_read.seq = read.seq[start:end]  
-                        new_read.qual = read.qual[start:end] if read.qual else None
+                        new_read.qual = read.qual[start:end]
                         new_read.tags = read.tags 
-                        outfile.write(new_read)
+                        batch.append(new_read)
                         n_reads += 1
-    print(f"{n_reads} reads with pattern have been extracted")
+
+                        if len(batch) >= batch_size:
+                            for b_read in batch:
+                                outfile.write(b_read)
+                            batch.clear()
+            # Write remaining reads in the last batch
+            for b_read in batch:
+                outfile.write(b_read)
+
+    print(f"{n_reads} reads with pattern have been extracted.")
 
 
 def length_distribution_plot(valid_pairs_dict, output_dir):
