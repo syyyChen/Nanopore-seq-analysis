@@ -142,17 +142,20 @@ def iterative_vsearch(input_bam, adapters_fasta, output_dir, tmp_dir, min_len=20
 
 
 def collect_config_statistics(vs_result, output_dir):
-    """Collect statistics of adapter patterns in one read"""
-    grouped_res = vs_result.select(['query','target']).group_by('query').agg(
-        pl.col("target").str.concat("-").alias("Configuration"))
+    """Collect statistics of adapter patterns in one read, optimized for speed."""
 
-    # Calculate the occurrences and frequencies
-    config_counts = grouped_res.group_by("Configuration").agg(
-        pl.count().alias("Occurrences")
-    ).with_columns(Frequency=(pl.col.Occurrences / grouped_res.height) * 100)
+    config_stats = (
+        vs_result
+        .select(['query', 'target'])
+        .group_by('query')
+        .agg(pl.col('target').str.concat('-').alias('Configuration'))
+        .group_by('Configuration')
+        .agg(pl.count().alias('Occurrences'))
+        .with_columns([pl.col('Occurrences') / pl.lit(vs_result.height()).alias('Frequency')])
+        .sort('Frequency', descending=True)
+    )
+    config_stats.write_csv(os.path.join(output_dir, 'config_stat.csv'))
 
-    config_counts = config_counts.sort("Frequency", descending=True)
-    config_counts.write_csv(os.path.join(output_dir, 'config_stat.csv'))
 
 
 def find_valid_pairs(vs_result):
