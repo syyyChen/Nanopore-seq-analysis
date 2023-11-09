@@ -48,10 +48,7 @@ schema = {
     'tl': pl.UInt32
 }
 
-valid_patterns = {
-    "adapter1_f": "adapter2_f",
-    "adapter2_r": "adapter1_r"
-}
+valid_patterns = (("adapter1_f", "adapter2_f"), ("adapter2_r", "adapter1_r"))
 
 def write_adapters_fasta(adapter1_seq, adapter2_seq, output):
     """Write adapters fasta for use with vsearch."""
@@ -146,11 +143,11 @@ def iterative_vsearch(input_bam, adapters_fasta, output_dir, tmp_dir, min_len=20
 
 def collect_config_statistics(vs_result, output_dir):
     """Collect statistics of adapter patterns in one read"""
-    grouped_res = vs_result.groupby('query').agg(
+    grouped_res = vs_result.select(['query','target']).group_by('query').agg(
         pl.col("target").str.concat("-").alias("Configuration"))
 
     # Calculate the occurrences and frequencies
-    config_counts = grouped_res.groupby("Configuration").agg(
+    config_counts = grouped_res.group_by("Configuration").agg(
         pl.count().alias("Occurrences")
     ).with_columns(Frequency=(pl.col.Occurrences / grouped_res.height) * 100)
 
@@ -158,37 +155,44 @@ def collect_config_statistics(vs_result, output_dir):
     config_counts.write_csv(os.path.join(output_dir, 'config_stat.csv'))
 
 
-def find_valid_pairs(vs_result):
-    """Identify valid pairs and get the position of the reads to be extracted"""
+def find_valid_pairs_optimized(vs_result):
     print("Finding valid pairs...")
-    valid_pairs = {}
-    n_valid = 0
-    n_reads = 0
+    # Create shifted columns for targets and positions
+    vs_result = vs_result.select(
+        ['query','target','qilo','qihi']
+        ).with_columns([
+        vs_result['target'].shift(-1).alias('next_target'),
+        vs_result['qihi'].shift(-1).alias('next_qihi'),
+        vs_result['qilo'].shift(-1).alias('next_qilo')
+    ])
+        
+    # Filter for valid pairs
+    valid_pairs_condition = (
+        ((vs_result['target'] == valid_patterns[0][0]) & (vs_result['next_target'] == valid_patterns[0][1])) |
+        ((vs_result['target'] == valid_patterns[1][0]) & (vs_result['next_target'] == valid_patterns[1][1]))
+    ) & (vs_result['qihi'] < vs_result['next_qilo'] - 1)
+    valid_pairs_df = vs_result.filter(valid_pairs_condition)
+    
+    n_adapters = vs_result.filter(pl.col('target') != '*').height
+    n_valid = valid_pairs_df.height
+    n_unpaired = n_adapters - 2 * n_valid
+    
+    # Group and aggregate
+    grouped_valid_pairs = valid_pairs_df.group_by('query').agg([
+        pl.col('qihi').alias('start_positions'),
+        pl.col('next_qilo').alias('end_positions')
+    ])
 
-    vs_result = vs_result.sort('qilo')
-    for query_id, grouped_df in vs_result.filter(pl.col('target') != '*').group_by('query'):
-        n_reads += 1
-
-        targets = grouped_df['target'].to_list()
-        qihis = grouped_df['qihi'].to_list()
-        qilos = grouped_df['qilo'].to_list()
-
-        for i in range(len(targets) - 1):
-            current_target = targets[i]
-            next_target = targets[i + 1]
-            current_qihi = qihis[i]
-            next_qilo = qilos[i + 1]
-
-            if (current_target in valid_patterns and
-                valid_patterns[current_target] == next_target and
-                current_qihi < next_qilo - 1):
-                valid_pairs.setdefault(query_id, [])
-                valid_pairs[query_id].append((current_qihi, next_qilo - 1))
-                n_valid += 1
-
-    n_unpaired = vs_result.filter(pl.col('target') != '*').height - 2 * n_valid
-    print(f"Found {n_valid} valid pairs in {n_reads} reads. {n_unpaired} adapters cannot be paired.")
-    return valid_pairs
+    # Create dictionary of query to valid pairs
+    valid_pairs_dict = {}
+    for row in grouped_valid_pairs.iter_rows():
+        query_id = row[0]
+        start_positions = row[1]
+        end_positions = [x - 1 for x in row[2]]
+        valid_pairs_dict[query_id] = list(zip(start_positions, end_positions))
+    
+    print(f"Found {n_valid} valid pairs. {n_unpaired} adapters cannot be paired.")
+    return valid_pairs_dict
 
 
 def extract_reads(input_bam, valid_pairs_dict, output_dir):
@@ -231,8 +235,9 @@ def length_distribution_plot(valid_pairs_dict, output_dir):
     plt.bar(bin_edges[:-1], frequencies, width=np.diff(bin_edges), color='grey', alpha=0.7)  
     plt.title('Length Distribution of Extracted Reads')  
     plt.xlabel('Length')  
-    plt.ylabel('Frequency')  
-    plt.xticks(np.arange(0, (2 + max(lengths) // 400) * 400, 400))
+    plt.ylabel('Frequency') 
+    stick_bin = max(lengths)//22//100*100
+    plt.xticks(np.arange(0, max(lengths)+stick_bin, stick_bin))
     plt.axvline(median_length, color='red', linestyle='dashed', linewidth=1)
     plt.axvline(average_length, color='orange', linestyle='dashed', linewidth=1)
     plt.text(median_length, max(frequencies)*0.8, f'Median: {median_length:.2f}', color='red')
