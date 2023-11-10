@@ -86,8 +86,8 @@ def read_vsearch_result(tsv_file, selected_columns=vsearch_colnames):
     return df
 
 
-def mask_regions(vs_result_df, fasta, tmp_dir):
-    """Mask mapped regions of reads with 'U' according to vsearch results """
+def mask_regions(vs_result_df, fasta, tmp_dir, batch_size=1000):
+    """Mask mapped regions of reads with 'U' according to vsearch results."""
     regions_to_mask = defaultdict(list)
     for row in vs_result_df.iter_rows():
         if row[11] == 0:
@@ -96,15 +96,23 @@ def mask_regions(vs_result_df, fasta, tmp_dir):
         start = row[6] - 1
         end = row[7]
         regions_to_mask[query_id].append((start, end))
-    
+
     masked_records = []
-    for record in SeqIO.parse(fasta, "fasta"):
-        masked_seq_str = str(record.seq)
-        for start, end in regions_to_mask[record.id]:
-            masked_seq_str = masked_seq_str[:start] + 'U' * (end - start) + masked_seq_str[end:]
-        masked_record = SeqRecord(Seq(masked_seq_str), id=record.id, description=record.description)
-        masked_records.append(masked_record)
-    SeqIO.write(masked_records, os.path.join(tmp_dir, "masked.fasta"), "fasta")
+    with open(os.path.join(tmp_dir, "masked.fasta"), 'w') as out_fh:
+        for record in SeqIO.parse(fasta, "fasta"):
+            masked_seq_str = str(record.seq)
+            for start, end in regions_to_mask[record.id]:
+                masked_seq_str = masked_seq_str[:start] + 'U' * (end - start) + masked_seq_str[end:]
+            masked_record = SeqRecord(Seq(masked_seq_str), id=record.id, description=record.description)
+            masked_records.append(masked_record)
+
+            if len(masked_records) >= batch_size:
+                SeqIO.write(masked_records, out_fh, "fasta")
+                masked_records.clear()
+
+        if masked_records:
+            SeqIO.write(masked_records, out_fh, "fasta")s
+
 
 
 def iterative_vsearch(input_bam, adapters_fasta, output_dir, tmp_dir, min_len=20, id=0.7, rounds=3, threads=1):
@@ -244,7 +252,7 @@ def length_distribution_plot(valid_pairs_dict, output_dir):
     total_counts = sum(counts)
     frequencies = counts / total_counts
 
-    plt.figure(figsize=(10, 6))  
+    plt.figure(figsize=(15, 9))  
     plt.bar(bin_edges[:-1], frequencies, width=np.diff(bin_edges), color='grey', alpha=0.7)  
     plt.title('Length Distribution of Extracted Reads')  
     plt.xlabel('Length')  
@@ -281,7 +289,7 @@ def main(args):
             threads=args.threads
         )
     
-    collect_config_statistics(vsearch_results, args.output_dir)
+    # collect_config_statistics(vsearch_results, args.output_dir)
 
     valid_pairs_dict = find_valid_pairs(vsearch_results)
 
