@@ -111,7 +111,7 @@ def mask_regions(vs_result_df, fasta, tmp_dir, batch_size=1000):
                 masked_records.clear()
 
         if masked_records:
-            SeqIO.write(masked_records, out_fh, "fasta")s
+            SeqIO.write(masked_records, out_fh, "fasta")
 
 
 
