@@ -149,25 +149,12 @@ def iterative_vsearch(input_bam, adapters_fasta, output_dir, tmp_dir, min_len=20
     return res_all
 
 
-def collect_config_statistics(vs_result, output_dir):
-    """Collect statistics of adapter patterns in one read, optimized for speed."""
-
-    config_stats = (
-        vs_result
-        .select(['query', 'target'])
-        .group_by('query')
-        .agg(pl.col('target').str.concat('-').alias('Configuration'))
-        .group_by('Configuration')
-        .agg(pl.count().alias('Occurrences'))
-        .with_columns([pl.col('Occurrences') / pl.lit(vs_result.height()).alias('Frequency')])
-        .sort('Frequency', descending=True)
-    )
-    config_stats.write_csv(os.path.join(output_dir, 'config_stat.csv'))
-
-
-
 def find_valid_pairs(vs_result):
     print("Finding valid pairs...")
+    stat = {}
+    stat['no_adapter'] = vs_result.filter(pl.col('target') == '*').height
+    n_with_adapter = vs_result.filter(pl.col('target') != '*').n_unique(subset = ['query'])
+    
     # Create shifted columns for targets and positions
     vs_result = vs_result.select(
         ['query','target','qilo','qihi']
@@ -176,34 +163,60 @@ def find_valid_pairs(vs_result):
         vs_result['qihi'].shift(-1).alias('next_qihi'),
         vs_result['qilo'].shift(-1).alias('next_qilo')
     ])
-        
+    
+    vs_result = vs_result.with_columns(
+        pl.when((pl.col("target") == valid_patterns[0][0]) & (pl.col("next_target") == valid_patterns[0][1])).then(pl.lit("+"))
+        .when((pl.col("target") == valid_patterns[1][0]) & (pl.col("next_target") == valid_patterns[1][1])).then(pl.lit("-"))
+        .otherwise(pl.lit("*")).alias("pattern")
+    )
+    
     # Filter for valid pairs
-    valid_pairs_condition = (
-        ((vs_result['target'] == valid_patterns[0][0]) & (vs_result['next_target'] == valid_patterns[0][1])) |
-        ((vs_result['target'] == valid_patterns[1][0]) & (vs_result['next_target'] == valid_patterns[1][1]))
-    ) & (vs_result['qihi'] < vs_result['next_qilo'] - 1)
+    valid_pairs_condition = ((vs_result['pattern'] != '*') & (vs_result['qihi'] < vs_result['next_qilo'] - 1))
     valid_pairs_df = vs_result.filter(valid_pairs_condition)
     
-    n_adapters = vs_result.filter(pl.col('target') != '*').height
-    n_valid = valid_pairs_df.height
-    n_unpaired = n_adapters - 2 * n_valid
-    
     # Group and aggregate
-    grouped_valid_pairs = valid_pairs_df.group_by('query').agg([
+    valid_query = valid_pairs_df.group_by('query').agg([
         pl.col('qihi').alias('start_positions'),
-        pl.col('next_qilo').alias('end_positions')
+        pl.col('next_qilo').alias('end_positions'),
+        pl.col('pattern').alias('patterns'),
     ])
+    valid_query = valid_query.with_columns(pl.col("patterns").list.len().alias("n_reads"))
+
+    n_valid = valid_query.height
+    stat['invalid'] = n_with_adapter - n_valid
+    stat['one_read'] = valid_query.filter(pl.col("n_reads") == 1).height
+    stat['two_reads'] = valid_query.filter(pl.col("n_reads") == 2).height
+    stat['more_reads'] = n_valid - stat['one_read'] - stat['two_reads']
 
     # Create dictionary of query to valid pairs
     valid_pairs_dict = {}
-    for row in grouped_valid_pairs.iter_rows():
+    for row in valid_query.iter_rows():
         query_id = row[0]
         start_positions = row[1]
         end_positions = [x - 1 for x in row[2]]
-        valid_pairs_dict[query_id] = list(zip(start_positions, end_positions))
+        patterns = row[3]
+        valid_pairs_dict[query_id] = list(zip(start_positions, end_positions, patterns))
     
-    print(f"Found {n_valid} valid pairs. {n_unpaired} adapters cannot be paired.")
-    return valid_pairs_dict
+    print(f"Found {n_valid} reads with valid pairs.")
+    return valid_pairs_dict, stat
+
+
+def valid_stat_plot(data_dict, output_dir):
+    def custom_autopct(pct, allvals):
+        absolute = int(pct/100.*sum(allvals))
+        return "{:.1f}%({:d})".format(pct, absolute)
+    labels = list(data_dict.keys())
+    sizes = list(data_dict.values())
+    wedgeprops = {"edgecolor": "white", 'linewidth': 1, 'linestyle': 'solid', 'antialiased': True}
+    plt.figure(figsize=(12, 6)) 
+    fig, ax = plt.subplots()
+    wedges, _, autotexts = ax.pie(sizes, autopct=lambda pct: custom_autopct(pct, sizes), wedgeprops=wedgeprops)
+    for autotext in autotexts:
+        autotext.set_size(8)
+    plt.legend(wedges, labels, loc='upper left', bbox_to_anchor=(1.2, 1.1))
+    output_path = os.path.join(output_dir, 'config_stat.png')
+    plt.savefig(output_path)
+    plt.close()  
 
 
 def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
@@ -218,13 +231,16 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
             for read in bamfile.fetch(until_eof=True):
                 query_name = read.query_name
                 if query_name in valid_pairs_dict:
-                    for idx, (start, end) in enumerate(valid_pairs_dict[query_name]):
+                    multi_reads = 1 if len(valid_pairs_dict[query_name])> 1 else 0
+                    for idx, (start, end, pattern) in enumerate(valid_pairs_dict[query_name]):
                         new_read = pysam.AlignedSegment()
                         new_read.query_name = f"{query_name}_{idx}"
                         new_read.flag = read.flag
                         new_read.seq = read.seq[start:end]  
                         new_read.qual = read.qual[start:end]
                         new_read.tags = read.tags 
+                        new_read.set_tag('mp', multi_reads, 'i')
+                        new_read.set_tag('pn', pattern, 'Z')
                         batch.append(new_read)
                         n_reads += 1
 
@@ -242,7 +258,7 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
 def length_distribution_plot(valid_pairs_dict, output_dir):
     lengths = []
     for values in valid_pairs_dict.values():
-        for start, end in values:
+        for start, end, pattern in values:
             lengths.append(end - start)
 
     median_length = np.median(lengths)
@@ -289,9 +305,10 @@ def main(args):
             threads=args.threads
         )
     
-    # collect_config_statistics(vsearch_results, args.output_dir)
 
-    valid_pairs_dict = find_valid_pairs(vsearch_results)
+    valid_pairs_dict, stat = find_valid_pairs(vsearch_results)
+    
+    valid_stat_plot(stat, output_dir=args.output_dir)
 
     extract_reads(
         input_bam=args.input_bam,
