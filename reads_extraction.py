@@ -174,11 +174,25 @@ def find_valid_pairs(vs_result):
     valid_pairs_condition = ((vs_result['pattern'] != '*') & (vs_result['qihi'] < vs_result['next_qilo'] - 1))
     valid_pairs_df = vs_result.filter(valid_pairs_condition)
     
+    valid_pairs_df = valid_pairs_df.with_columns([
+        pl.when(pl.col('pattern') == '+')
+        .then(pl.col('qilo') - 11)
+        .otherwise(pl.col('next_qihi'))
+        .alias('i7_start'),
+
+        pl.when(pl.col('pattern') == '+')
+        .then(pl.col('next_qihi'))
+        .otherwise(pl.col('qilo') - 11)
+        .alias('i5_start')
+        ])
+    
     # Group and aggregate
     valid_query = valid_pairs_df.group_by('query').agg([
         pl.col('qihi').alias('start_positions'),
         pl.col('next_qilo').alias('end_positions'),
         pl.col('pattern').alias('patterns'),
+        pl.col('i7_start').alias('i7_start'),
+        pl.col('i5_start').alias('i5_start')
     ])
     valid_query = valid_query.with_columns(pl.col("patterns").list.len().alias("n_reads"))
 
@@ -195,7 +209,9 @@ def find_valid_pairs(vs_result):
         start_positions = row[1]
         end_positions = [x - 1 for x in row[2]]
         patterns = row[3]
-        valid_pairs_dict[query_id] = list(zip(start_positions, end_positions, patterns))
+        i7 = row[4]
+        i5 = row[5]
+        valid_pairs_dict[query_id] = list(zip(start_positions, end_positions, patterns, i7, i5))
     
     print(f"Found {n_valid} reads with valid pairs.")
     return valid_pairs_dict, stat
@@ -232,7 +248,9 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
                 query_name = read.query_name
                 if query_name in valid_pairs_dict:
                     multi_reads = 1 if len(valid_pairs_dict[query_name])> 1 else 0
-                    for idx, (start, end, pattern) in enumerate(valid_pairs_dict[query_name]):
+                    for idx, (start, end, pattern, i7_start, i5_start) in enumerate(valid_pairs_dict[query_name]):
+                        i7 = read.seq[i7_start:i7_start+10]
+                        i5 = read.seq[i5_start:i5_start+10]
                         new_read = pysam.AlignedSegment()
                         new_read.query_name = f"{query_name}_{idx}"
                         new_read.flag = read.flag
@@ -241,6 +259,11 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
                         new_read.tags = read.tags 
                         new_read.set_tag('mp', multi_reads, 'i')
                         new_read.set_tag('pn', pattern, 'Z')
+                        new_read.set_tag('i7', i7, 'Z')
+                        new_read.set_tag('i5', i5, 'Z')
+                        umi = new_read.seq[-8:] if pattern=='+' else new_read.seq[0:8]
+                        new_read.set_tag('mi', umi, 'Z')
+                        
                         batch.append(new_read)
                         n_reads += 1
 
@@ -258,7 +281,7 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
 def length_distribution_plot(valid_pairs_dict, output_dir):
     lengths = []
     for values in valid_pairs_dict.values():
-        for start, end, pattern in values:
+        for start, end, pattern, i7, i5 in values:
             lengths.append(end - start)
 
     median_length = np.median(lengths)
