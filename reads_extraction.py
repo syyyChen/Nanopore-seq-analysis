@@ -327,6 +327,10 @@ def main(args):
             rounds=args.rounds,
             threads=args.threads
         )
+        adapter_summary = vsearch_results.group_by("target").agg(pl.count().alias("Occurrences"))\
+            .with_columns((pl.col("Occurrences") / (pl.col("Occurrences").sum()))\
+                .alias("Frequency")).sort("Frequency", descending=True)
+        print(adapter_summary)
     
 
     valid_pairs_dict, stat = find_valid_pairs(vsearch_results)
