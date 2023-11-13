@@ -171,7 +171,7 @@ def find_valid_pairs(vs_result):
     )
     
     # Filter for valid pairs
-    valid_pairs_condition = ((vs_result['pattern'] != '*') & (vs_result['qihi'] < vs_result['next_qilo'] - 1))
+    valid_pairs_condition = ((vs_result['pattern'] != '*') & (vs_result['qihi'] < vs_result['next_qilo'] - 10))
     valid_pairs_df = vs_result.filter(valid_pairs_condition)
     
     valid_pairs_df = valid_pairs_df.with_columns([
