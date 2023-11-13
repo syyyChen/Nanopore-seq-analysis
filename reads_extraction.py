@@ -261,7 +261,7 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
                         new_read.set_tag('pn', pattern, 'Z')
                         new_read.set_tag('i7', i7, 'Z')
                         new_read.set_tag('i5', i5, 'Z')
-                        umi = new_read.seq[-8:] if pattern=='+' else new_read.seq[0:8]
+                        umi = read.seq[end-8:end] if pattern=='+' else read.seq[start:start+8]
                         new_read.set_tag('mi', umi, 'Z')
                         
                         batch.append(new_read)
