@@ -229,7 +229,7 @@ def valid_stat_plot(data_dict, output_dir):
     wedges, _, autotexts = ax.pie(sizes, autopct=lambda pct: custom_autopct(pct, sizes), wedgeprops=wedgeprops)
     for autotext in autotexts:
         autotext.set_size(8)
-    plt.legend(wedges, labels, loc='upper left', bbox_to_anchor=(1.2, 1.1))
+    plt.legend(wedges, labels, loc='upper left', bbox_to_anchor=(1.1, 1.1))
     output_path = os.path.join(output_dir, 'config_stat.png')
     plt.savefig(output_path)
     plt.close()  
@@ -252,7 +252,7 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
                         i7 = read.seq[i7_start:i7_start+10]
                         i5 = read.seq[i5_start:i5_start+10]
                         new_read = pysam.AlignedSegment()
-                        new_read.query_name = f"{query_name}_{idx}"
+                        new_read.query_name = f"{query_name}_{idx}" if multi_reads else query_name
                         new_read.flag = read.flag
                         new_read.seq = read.seq[start:end]  
                         new_read.qual = read.qual[start:end]
