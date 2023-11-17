@@ -240,40 +240,61 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
     print("Extracting reads...")
     n_reads = 0
     output_bam = os.path.join(output_dir, "extracted_reads.bam")
+    i7_file = os.path.join(output_dir, "index_i7.fastq")
+    i5_file = os.path.join(output_dir, "index_i5.fastq")
 
-    with pysam.AlignmentFile(input_bam, "rb", check_sq=False) as bamfile:    
-        with pysam.AlignmentFile(output_bam, "wb", header=bamfile.header) as outfile:
-            batch = []
+    with pysam.AlignmentFile(input_bam, "rb", check_sq=False) as bamfile, \
+        pysam.AlignmentFile(output_bam, "wb", header=bamfile.header) as outfile:
+            reads_batch = []
+            i7_batch = []
+            i5_batch = []
+            
             for read in bamfile.fetch(until_eof=True):
                 query_name = read.query_name
                 if query_name in valid_pairs_dict:
                     multi_reads = 1 if len(valid_pairs_dict[query_name])> 1 else 0
+                    
                     for idx, (start, end, pattern, i7_start, i5_start) in enumerate(valid_pairs_dict[query_name]):
-                        i7 = read.seq[i7_start:i7_start+10]
-                        i5 = read.seq[i5_start:i5_start+10]
+                        query_name = f"{query_name}_{idx}" if multi_reads else query_name
+                        
+                        i7_seq = read.seq[i7_start:i7_start+10]
+                        i7_qual = read.qual[i7_start:i7_start+10]
+                        i5_seq = read.seq[i5_start:i5_start+10]
+                        i5_qual = read.qual[i5_start:i5_start+10]
+                        i7_record = SeqRecord(Seq(i7_seq), id=query_name, description="", letter_annotations={"phred_quality": [ord(q) - 33 for q in i7_qual]})
+                        i5_record = SeqRecord(Seq(i5_seq), id=query_name, description="", letter_annotations={"phred_quality": [ord(q) - 33 for q in i5_qual]})
+                        i7_batch.append(i7_record)
+                        i5_batch.append(i5_record)
+
                         new_read = pysam.AlignedSegment()
-                        new_read.query_name = f"{query_name}_{idx}" if multi_reads else query_name
+                        new_read.query_name = query_name
                         new_read.flag = read.flag
-                        new_read.seq = read.seq[start:end]  
+                        new_read.seq = read.seq[start:en
                         new_read.qual = read.qual[start:end]
                         new_read.tags = read.tags 
                         new_read.set_tag('mp', multi_reads, 'i')
                         new_read.set_tag('pn', pattern, 'Z')
-                        new_read.set_tag('i7', i7, 'Z')
-                        new_read.set_tag('i5', i5, 'Z')
                         umi = read.seq[end-8:end] if pattern=='+' else read.seq[start:start+8]
                         new_read.set_tag('mi', umi, 'Z')
-                        
-                        batch.append(new_read)
+                        reads_batch.append(new_read)
                         n_reads += 1
 
-                        if len(batch) >= batch_size:
-                            for b_read in batch:
+                        if len(reads_batch) >= batch_size:
+                            for b_read in reads_batch:
                                 outfile.write(b_read)
-                            batch.clear()
+                            reads_batch.clear()
+                            with open(i7_output, 'a') as i7_file, open(i5_output, 'a') as i5_file:
+                                SeqIO.write(i7_batch, i7_file, "fastq")
+                                SeqIO.write(i5_batch, i5_file, "fastq")
+                                i7_batch.clear()
+                                i5_batch.clear()
+                            
             # Write remaining reads in the last batch
-            for b_read in batch:
+            for b_read in reads_batch:
                 outfile.write(b_read)
+            with open(i7_output, 'a') as i7_file, open(i5_output, 'a') as i5_file:
+                SeqIO.write(i7_batch, i7_file, "fastq")
+                SeqIO.write(i5_batch, i5_file, "fastq")
 
     print(f"{n_reads} reads with pattern have been extracted.")
 
