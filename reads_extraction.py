@@ -1,6 +1,7 @@
 import os
 import argparse
 import sys
+import csv
 import numpy as np
 import polars as pl
 from Bio import SeqIO
@@ -229,10 +230,18 @@ def valid_stat_plot(data_dict, output_dir):
     wedges, _, autotexts = ax.pie(sizes, autopct=lambda pct: custom_autopct(pct, sizes), wedgeprops=wedgeprops)
     for autotext in autotexts:
         autotext.set_size(8)
-    plt.legend(wedges, labels, loc='upper left', bbox_to_anchor=(1.1, 1.1))
+    plt.legend(wedges, labels, loc='upper left', bbox_to_anchor=(1.05, 1.05))
     output_path = os.path.join(output_dir, 'config_stat.png')
     plt.savefig(output_path)
     plt.close()  
+
+
+def write_barcode_batch(bc_batch, bc_output, write_header=False):
+    with open(bc_output, 'a', newline='') as file:
+        writer = csv.DictWriter(file, fieldnames=["read_id", "pattern", "i7index_uncorr", "i5index_uncorr"], delimiter='\t')
+        if write_header:
+            writer.writeheader()
+        writer.writerows(bc_batch)
 
 
 def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
@@ -240,14 +249,16 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
     print("Extracting reads...")
     n_reads = 0
     output_bam = os.path.join(output_dir, "extracted_reads.bam")
-    i7_file = os.path.join(output_dir, "index_i7.fastq")
-    i5_file = os.path.join(output_dir, "index_i5.fastq")
+    i7_output = os.path.join(output_dir, "index_i7.fastq")
+    i5_output = os.path.join(output_dir, "index_i5.fastq")
+    bc_tsv = os.path.join(output_dir, "barcodes.tsv")
 
     with pysam.AlignmentFile(input_bam, "rb", check_sq=False) as bamfile, \
         pysam.AlignmentFile(output_bam, "wb", header=bamfile.header) as outfile:
             reads_batch = []
             i7_batch = []
             i5_batch = []
+            bc_batch = []
             
             for read in bamfile.fetch(until_eof=True):
                 query_name = read.query_name
@@ -255,21 +266,37 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
                     multi_reads = 1 if len(valid_pairs_dict[query_name])> 1 else 0
                     
                     for idx, (start, end, pattern, i7_start, i5_start) in enumerate(valid_pairs_dict[query_name]):
-                        query_name = f"{query_name}_{idx}" if multi_reads else query_name
+                        query_id = f"{query_name}_{idx}" if multi_reads else query_name
                         
-                        i7_seq = read.seq[i7_start:i7_start+10]
-                        i7_qual = read.qual[i7_start:i7_start+10]
-                        i5_seq = read.seq[i5_start:i5_start+10]
-                        i5_qual = read.qual[i5_start:i5_start+10]
-                        i7_record = SeqRecord(Seq(i7_seq), id=query_name, description="", letter_annotations={"phred_quality": [ord(q) - 33 for q in i7_qual]})
-                        i5_record = SeqRecord(Seq(i5_seq), id=query_name, description="", letter_annotations={"phred_quality": [ord(q) - 33 for q in i5_qual]})
+                        # output the fastq file for some analysis
+                        i7_end = min(i7_start + 10, read.rlen)
+                        i7_start = max(i7_start, 0)
+                        i5_end = min(i5_start + 10, read.rlen)
+                        i5_start = max(i5_start, 0)
+                        i7_seq = read.seq[i7_start:i7_end] 
+                        i7_qual = read.qual[i7_start:i7_end]
+                        i5_seq = read.seq[i5_start:i5_end]
+                        i5_qual = read.qual[i5_start:i5_end]
+                        i7_record = SeqRecord(Seq(i7_seq), id=query_id, description=pattern, \
+                            letter_annotations={"phred_quality": [ord(q) - 33 for q in i7_qual]})
+                        i5_record = SeqRecord(Seq(i5_seq), id=query_id, description=pattern, \
+                            letter_annotations={"phred_quality": [ord(q) - 33 for q in i5_qual]})
                         i7_batch.append(i7_record)
                         i5_batch.append(i5_record)
+                        
+                        # output barcodes table for correction
+                        barcode_info = {
+                            "read_id": query_id,
+                            "pattern": pattern,
+                            "i7index_uncorr": i7_seq,
+                            "i5index_uncorr": i5_seq
+                            }
+                        bc_batch.append(barcode_info)
 
                         new_read = pysam.AlignedSegment()
-                        new_read.query_name = query_name
+                        new_read.query_name = query_id
                         new_read.flag = read.flag
-                        new_read.seq = read.seq[start:en
+                        new_read.seq = read.seq[start:end]
                         new_read.qual = read.qual[start:end]
                         new_read.tags = read.tags 
                         new_read.set_tag('mp', multi_reads, 'i')
@@ -288,6 +315,8 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
                                 SeqIO.write(i5_batch, i5_file, "fastq")
                                 i7_batch.clear()
                                 i5_batch.clear()
+                            write_barcode_batch(bc_batch, bc_tsv, write_header=(n_reads == batch_size))
+                            bc_batch.clear()
                             
             # Write remaining reads in the last batch
             for b_read in reads_batch:
@@ -295,6 +324,8 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
             with open(i7_output, 'a') as i7_file, open(i5_output, 'a') as i5_file:
                 SeqIO.write(i7_batch, i7_file, "fastq")
                 SeqIO.write(i5_batch, i5_file, "fastq")
+            if bc_batch:
+                write_barcode_batch(bc_batch, bc_tsv)
 
     print(f"{n_reads} reads with pattern have been extracted.")
 
