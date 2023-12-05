@@ -55,10 +55,13 @@ def barcode_scan(sequence, whitelist_dict, max_ed=2, min_ed_diff=1, flank=5, bc_
     edit_distance = candidates[0][1]
     frameshift = candidates[0][2]
     
-    if edit_distance <= max_ed and candidates[1][1] - edit_distance >= min_ed_diff:
-        bc_idx = candidates[0][0]
+    if edit_distance <= max_ed:
+        if candidates[1][1] - edit_distance >= min_ed_diff:
+            bc_idx = candidates[0][0]
+        else:
+            bc_idx = 'Ambiguous'
     else:
-        bc_idx = None
+        bc_idx = 'NoHit'
 
     return (top_hit_bc, edit_distance, bc_idx, frameshift)
 
@@ -90,9 +93,8 @@ def process_barcodes(uncorr_bc_file, output_dir, i7_whitelist, i5_whitelist,
         reader = csv.reader(input_file, delimiter='\t')
         column_names = next(reader)
         writer = csv.DictWriter(output_file, 
-                                fieldnames=["read_id", "i7index_uncorr", "i7index_qual", "i7index_ed", 
-                                            "i7index_corr", "i7index_frameshift", "i5index_uncorr", 
-                                            "i5index_qual", "i5index_ed", "i5index_corr", "i5index_frameshift", "wellid"], 
+                                fieldnames=["read_id", "i7index_uncorr", "i7index_qual", "i7index_idx","i7index_ed", "i7index_corr", "i7index_frameshift", 
+                                            "i5index_uncorr", "i5index_qual", "i5index_idx", "i5index_ed", "i5index_corr", "i5index_frameshift", "wellid"], 
                                 delimiter='\t')
         writer.writeheader()
 
@@ -102,17 +104,19 @@ def process_barcodes(uncorr_bc_file, output_dir, i7_whitelist, i5_whitelist,
             wl_dic = wl_p if pattern == '+' else wl_n
             (i7_bc, i7_ed, i7_idx, i7_shift) = barcode_scan(i7_uncorr, wl_dic['i7'], max_ed, min_ed_diff, flank, bc_length)
             (i5_bc, i5_ed, i5_idx, i5_shift) = barcode_scan(i5_uncorr, wl_dic['i5'], max_ed, min_ed_diff, flank, bc_length)
-            wellid = f"{i5_idx}{i7_idx}" if i7_idx is not None and i5_idx is not None else 'Unsure'
+            wellid = f"{i5_idx}{i7_idx}" if i7_idx not in ['Ambiguous', 'NoHit'] and i5_idx not in ['Ambiguous', 'NoHit'] else 'Unsure'
             
             bc_corr = {
                 'read_id': id,
                 'i7index_uncorr': i7_uncorr,
                 'i7index_qual': i7_qual,
+                'i7index_idx': i7_idx,
                 'i7index_ed': i7_ed,
                 'i7index_corr': i7_bc,
                 'i7index_frameshift': i7_shift,
                 'i5index_uncorr': i5_uncorr,
                 'i5index_qual': i5_qual,
+                'i5index_idx': i5_idx,
                 'i5index_ed': i5_ed,
                 'i5index_corr': i5_bc,
                 'i5index_frameshift': i5_shift,
