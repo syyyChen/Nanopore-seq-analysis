@@ -6,7 +6,6 @@ import csv
 import pysam
 from Bio import SeqIO
 from Bio.Seq import Seq
-from Bio.SeqRecord import SeqRecord
 
 vsearch_colnames = [
     "query",
@@ -126,24 +125,22 @@ def find_valid_pairs(vs_result):
 
 def write_barcode_batch(bc_batch, bc_output, write_header=False):
     with open(bc_output, 'a', newline='') as file:
-        writer = csv.DictWriter(file, fieldnames=["read_id", "pattern", "i7index_uncorr", "i5index_uncorr"], delimiter='\t')
+        writer = csv.DictWriter(file, 
+                                fieldnames=["read_id", "pattern", "i7index_uncorr", "i7index_uncorr_qual", 
+                                            "i5index_uncorr",  "i5index_uncorr_qual"], 
+                                delimiter='\t')
         if write_header:
             writer.writeheader()
         writer.writerows(bc_batch)
 
 
-def extract_barcodes(input_bam, valid_pairs_dict, output_dir, flank_in = 5, flank_out = 5, batch_size=1000):
+def extract_barcodes(input_bam, valid_pairs_dict, output_dir, flank = 5, batch_size=1000):
     """Extract reads from the bam file with batch writing."""
     print("Extracting barcodes...")
     n_reads = 0
-    i7_output = os.path.join(output_dir, "index_i7.fastq")
-    i5_output = os.path.join(output_dir, "index_i5.fastq")
     bc_tsv = os.path.join(output_dir, "barcodes.tsv")
 
-    with pysam.AlignmentFile(input_bam, "rb", check_sq=False) as bamfile, \
-        open(i7_output, 'a') as i7_file, open(i5_output, 'a') as i5_file:
-            i7_batch = []
-            i5_batch = []
+    with pysam.AlignmentFile(input_bam, "rb", check_sq=False) as bamfile:
             bc_batch = []
             
             for read in bamfile.fetch(until_eof=True):
@@ -153,43 +150,32 @@ def extract_barcodes(input_bam, valid_pairs_dict, output_dir, flank_in = 5, flan
                     for idx, (start, end, pattern, i7_start, i5_start) in enumerate(valid_pairs_dict[query_name]):
                         query_id = f"{query_name}_{idx}" if multi_reads else query_name
                         
-                        # output the fastq file for some analysis
-                        i7_end = min(i7_start + 10 + flank_in, read.rlen)
-                        i7_start = max(i7_start - flank_out, 0)
-                        i5_end = min(i5_start + 10 + flank_in, read.rlen)
-                        i5_start = max(i5_start - flank_out, 0)
-                        i7_seq = read.seq[i7_start:i7_end] 
+                        i7_end = min(i7_start + 10 + flank, read.rlen)
+                        i7_start = max(i7_start - flank, 0)
+                        i5_end = min(i5_start + 10 + flank, read.rlen)
+                        i5_start = max(i5_start - flank, 0)
+                        i7_seq = read.seq[i7_start:i7_end]
                         i7_qual = read.qual[i7_start:i7_end]
                         i5_seq = read.seq[i5_start:i5_end]
                         i5_qual = read.qual[i5_start:i5_end]
-                        i7_record = SeqRecord(Seq(i7_seq), id=query_id, description=pattern, \
-                            letter_annotations={"phred_quality": [ord(q) - 33 for q in i7_qual]})
-                        i5_record = SeqRecord(Seq(i5_seq), id=query_id, description=pattern, \
-                            letter_annotations={"phred_quality": [ord(q) - 33 for q in i5_qual]})
-                        i7_batch.append(i7_record)
-                        i5_batch.append(i5_record)
                         
                         # output barcodes table for correction
                         barcode_info = {
                             "read_id": query_id,
                             "pattern": pattern,
                             "i7index_uncorr": i7_seq,
-                            "i5index_uncorr": i5_seq
+                            "i7index_uncorr_qual": i7_qual,
+                            "i5index_uncorr": i5_seq,
+                            "i5index_uncorr_qual": i5_qual
                             }
                         bc_batch.append(barcode_info)
 
                         n_reads += 1
                         if n_reads >= batch_size:
-                            SeqIO.write(i7_batch, i7_file, "fastq")
-                            SeqIO.write(i5_batch, i5_file, "fastq")
-                            i7_batch.clear()
-                            i5_batch.clear()
                             write_barcode_batch(bc_batch, bc_tsv, write_header=(n_reads == batch_size))
                             bc_batch.clear()
                             
             if bc_batch:
-                SeqIO.write(i7_batch, i7_file, "fastq")
-                SeqIO.write(i5_batch, i5_file, "fastq")
                 write_barcode_batch(bc_batch, bc_tsv)
 
 
@@ -206,8 +192,7 @@ def main(args):
         input_bam=args.input_bam,
         valid_pairs_dict=valid_pairs_dict,
         output_dir=args.output_dir,
-        flank_in=args.flank_in,
-        flank_out=args.flank_out
+        flank=args.flank
     )
 
 
@@ -216,7 +201,6 @@ if __name__ == "__main__":
     parser.add_argument("-b", "--input_bam", required=True, help="Input BAM file path")
     parser.add_argument("-v", "--vsearch_result", required=True, help="Input vsearch_result file path")
     parser.add_argument("-o", "--output_dir", required=True, help="Directory to save output files")
-    parser.add_argument("-fi", "--flank_in", type=int, default=5, help="Extra nucleotides to extract at two ends of the reads")
-    parser.add_argument("-fo", "--flank_out", type=int, default=5, help="Extra nucleotides to extract stretching beyond the assumed index boundaries")
+    parser.add_argument("-f", "--flank", type=int, default=5, help="Extra nucleotides to extract at two ends of the reads")
     args = parser.parse_args()
     main(args)
