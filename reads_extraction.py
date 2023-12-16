@@ -116,7 +116,7 @@ def mask_regions(vs_result_df, fasta, tmp_dir, batch_size=1000):
 
 
 
-def iterative_vsearch(input_bam, adapters_fasta, output_dir, tmp_dir, min_len=20, id=0.7, rounds=3, threads=1):
+def iterative_vsearch(input_bam, adapters_fasta, output_dir, tmp_dir, min_len=20, id=0.7, rounds=5, threads=1):
     """Do iterative vsearch to find all adapters in the reads for pattern identification"""
     
     output = os.path.join(output_dir, "adapter_scan.vsearch.tsv")
@@ -160,6 +160,7 @@ def find_valid_pairs(vs_result):
     vs_result = vs_result.select(
         ['query','target','qilo','qihi']
         ).with_columns([
+        vs_result['query'].shift(-1).alias('next_query'),
         vs_result['target'].shift(-1).alias('next_target'),
         vs_result['qihi'].shift(-1).alias('next_qihi'),
         vs_result['qilo'].shift(-1).alias('next_qilo')
@@ -172,19 +173,22 @@ def find_valid_pairs(vs_result):
     )
     
     # Filter for valid pairs
-    valid_pairs_condition = ((vs_result['pattern'] != '*') & (vs_result['qihi'] < vs_result['next_qilo'] - 10))
+    # Note: do not do subtraction with qilo & qihi here!
+    valid_pairs_condition = ((vs_result['query'] == vs_result['next_query']) & 
+                            (vs_result['pattern'] != '*') & 
+                            (vs_result['next_qilo'] > vs_result['qihi'] + 15))
     valid_pairs_df = vs_result.filter(valid_pairs_condition)
     
     valid_pairs_df = valid_pairs_df.with_columns([
         pl.when(pl.col('pattern') == '+')
-        .then(pl.col('qilo') - 11)
+        .then(pl.col('qilo'))
         .otherwise(pl.col('next_qihi'))
-        .alias('i7_start'),
+        .alias('i7_boundary'),
 
         pl.when(pl.col('pattern') == '+')
         .then(pl.col('next_qihi'))
-        .otherwise(pl.col('qilo') - 11)
-        .alias('i5_start')
+        .otherwise(pl.col('qilo'))
+        .alias('i5_boundary')
         ])
     
     # Group and aggregate
@@ -192,8 +196,8 @@ def find_valid_pairs(vs_result):
         pl.col('qihi').alias('start_positions'),
         pl.col('next_qilo').alias('end_positions'),
         pl.col('pattern').alias('patterns'),
-        pl.col('i7_start').alias('i7_start'),
-        pl.col('i5_start').alias('i5_start')
+        pl.col('i7_boundary').alias('i7_boundary'),
+        pl.col('i5_boundary').alias('i5_boundary')
     ])
     valid_query = valid_query.with_columns(pl.col("patterns").list.len().alias("n_reads"))
 
@@ -230,7 +234,7 @@ def valid_stat_plot(data_dict, output_dir):
     wedges, _, autotexts = ax.pie(sizes, autopct=lambda pct: custom_autopct(pct, sizes), wedgeprops=wedgeprops)
     for autotext in autotexts:
         autotext.set_size(8)
-    plt.legend(wedges, labels, loc='upper left', bbox_to_anchor=(1.05, 1.05))
+    plt.legend(wedges, labels, loc='upper left', bbox_to_anchor=(1.02, 1.02))
     output_path = os.path.join(output_dir, 'config_stat.png')
     plt.savefig(output_path)
     plt.close()  
@@ -238,26 +242,25 @@ def valid_stat_plot(data_dict, output_dir):
 
 def write_barcode_batch(bc_batch, bc_output, write_header=False):
     with open(bc_output, 'a', newline='') as file:
-        writer = csv.DictWriter(file, fieldnames=["read_id", "pattern", "i7index_uncorr", "i5index_uncorr"], delimiter='\t')
+        writer = csv.DictWriter(file, 
+                                fieldnames=["read_id", "pattern", "i7index_uncorr", "i7index_uncorr_qual", 
+                                            "i5index_uncorr",  "i5index_uncorr_qual"], 
+                                delimiter='\t')
         if write_header:
             writer.writeheader()
         writer.writerows(bc_batch)
 
 
-def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
+def extract_reads(input_bam, valid_pairs_dict, output_dir, flank=5, bc_length=10, batch_size=1000):
     """Extract reads from the bam file with batch writing."""
     print("Extracting reads...")
     n_reads = 0
     output_bam = os.path.join(output_dir, "extracted_reads.bam")
-    i7_output = os.path.join(output_dir, "index_i7.fastq")
-    i5_output = os.path.join(output_dir, "index_i5.fastq")
     bc_tsv = os.path.join(output_dir, "barcodes.tsv")
 
     with pysam.AlignmentFile(input_bam, "rb", check_sq=False) as bamfile, \
         pysam.AlignmentFile(output_bam, "wb", header=bamfile.header) as outfile:
             reads_batch = []
-            i7_batch = []
-            i5_batch = []
             bc_batch = []
             
             for read in bamfile.fetch(until_eof=True):
@@ -265,32 +268,34 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
                 if query_name in valid_pairs_dict:
                     multi_reads = 1 if len(valid_pairs_dict[query_name])> 1 else 0
                     
-                    for idx, (start, end, pattern, i7_start, i5_start) in enumerate(valid_pairs_dict[query_name]):
+                    for idx, (start, end, pattern, i7, i5) in enumerate(valid_pairs_dict[query_name]):
                         query_id = f"{query_name}_{idx}" if multi_reads else query_name
                         
-                        # output the fastq file for some analysis
-                        i7_end = min(i7_start + 10, read.rlen)
-                        i7_start = max(i7_start, 0)
-                        i5_end = min(i5_start + 10, read.rlen)
-                        i5_start = max(i5_start, 0)
+                        if pattern == '+':
+                            i7_start = max(i7 - 1 - bc_length - flank, 0)
+                            i7_end = i7 - 1 + flank
+                            i5_start = i5 - flank
+                            i5_end = min(i5 + 1 + bc_length + flank, read.rlen)
+                        if pattern == '-':
+                            i5_start = max(i5 - 1 - bc_length - flank, 0)
+                            i5_end = i5 - 1 + flank
+                            i7_start = i7 - flank
+                            i7_end = min(i7 + 1 + bc_length + flank, read.rlen)                        
+                            
                         i7_seq = read.seq[i7_start:i7_end] 
                         i7_qual = read.qual[i7_start:i7_end]
                         i5_seq = read.seq[i5_start:i5_end]
                         i5_qual = read.qual[i5_start:i5_end]
-                        i7_record = SeqRecord(Seq(i7_seq), id=query_id, description=pattern, \
-                            letter_annotations={"phred_quality": [ord(q) - 33 for q in i7_qual]})
-                        i5_record = SeqRecord(Seq(i5_seq), id=query_id, description=pattern, \
-                            letter_annotations={"phred_quality": [ord(q) - 33 for q in i5_qual]})
-                        i7_batch.append(i7_record)
-                        i5_batch.append(i5_record)
                         
                         # output barcodes table for correction
                         barcode_info = {
                             "read_id": query_id,
                             "pattern": pattern,
                             "i7index_uncorr": i7_seq,
-                            "i5index_uncorr": i5_seq
-                            }
+                            "i7index_uncorr_qual": i7_qual,
+                            "i5index_uncorr": i5_seq,
+                            "i5index_uncorr_qual": i5_qual
+                            }                        
                         bc_batch.append(barcode_info)
 
                         new_read = pysam.AlignedSegment()
@@ -301,8 +306,6 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
                         new_read.tags = read.tags 
                         new_read.set_tag('mp', multi_reads, 'i')
                         new_read.set_tag('pn', pattern, 'Z')
-                        umi = read.seq[end-8:end] if pattern=='+' else read.seq[start:start+8]
-                        new_read.set_tag('mi', umi, 'Z')
                         reads_batch.append(new_read)
                         n_reads += 1
 
@@ -310,20 +313,12 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, batch_size=1000):
                             for b_read in reads_batch:
                                 outfile.write(b_read)
                             reads_batch.clear()
-                            with open(i7_output, 'a') as i7_file, open(i5_output, 'a') as i5_file:
-                                SeqIO.write(i7_batch, i7_file, "fastq")
-                                SeqIO.write(i5_batch, i5_file, "fastq")
-                                i7_batch.clear()
-                                i5_batch.clear()
                             write_barcode_batch(bc_batch, bc_tsv, write_header=(n_reads == batch_size))
                             bc_batch.clear()
                             
             # Write remaining reads in the last batch
             for b_read in reads_batch:
                 outfile.write(b_read)
-            with open(i7_output, 'a') as i7_file, open(i5_output, 'a') as i5_file:
-                SeqIO.write(i7_batch, i7_file, "fastq")
-                SeqIO.write(i5_batch, i5_file, "fastq")
             if bc_batch:
                 write_barcode_batch(bc_batch, bc_tsv)
 
@@ -392,7 +387,10 @@ def main(args):
     extract_reads(
         input_bam=args.input_bam,
         valid_pairs_dict=valid_pairs_dict,
-        output_dir=args.output_dir
+        output_dir=args.output_dir,
+        flank = args.flank,
+        bc_length = args.bc_length,
+        batch_size = args.batch_size
     )
 
     length_distribution_plot(
@@ -413,6 +411,9 @@ if __name__ == "__main__":
     parser.add_argument("-id", "--identity", type=float, default=0.7, help="Minimum identity for adapter scanning")
     parser.add_argument("-r", "--rounds", type=int, default=3, help="Number of iterative rounds for vsearch")
     parser.add_argument("-t", "--threads", type=int, default=1, help="Number of threads of vsearch")
+    parser.add_argument("-f", "--flank", type=int, default=5, help="Extra nucleotides to extract at two ends of the reads")
+    parser.add_argument("-bl", "--bc_length", type=int, default=10, help="Length of the barcodes")
+    parser.add_argument("-s", "--batch_size", type=int, default=1000, help="Batch size for writing output files")
     args = parser.parse_args()
     main(args)
 
