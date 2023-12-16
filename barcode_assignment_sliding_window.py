@@ -37,7 +37,7 @@ def barcode_scan(sequence, whitelist_dict, max_ed=2, min_ed_diff=1, flank=5, bc_
 
     Returns:
     tuple: A tuple containing the best matching barcode, its edit distance, index, and window shift.
-           Returns None for all elements if no suitable match is found.
+            Returns None for all elements if no suitable match is found.
     """
     sld_windows = [sequence[i:i+bc_length] for i in range(len(sequence) - bc_length + 1)] if len(sequence) > 10 else [sequence]
     candidates = []
@@ -68,7 +68,7 @@ def barcode_scan(sequence, whitelist_dict, max_ed=2, min_ed_diff=1, flank=5, bc_
 
 
 def process_barcodes(uncorr_bc_file, output_dir, i7_whitelist, i5_whitelist, 
-                     chunk_size=5000, max_ed=2, min_ed_diff=1, flank=5, bc_length=10):
+                    chunk_size=5000, max_ed=2, min_ed_diff=1, flank=5, bc_length=10):
     """
     Process a TSV file in chunks.
     Args:
@@ -93,7 +93,7 @@ def process_barcodes(uncorr_bc_file, output_dir, i7_whitelist, i5_whitelist,
         reader = csv.reader(input_file, delimiter='\t')
         column_names = next(reader)
         writer = csv.DictWriter(output_file, 
-                                fieldnames=["read_id", "i7index_uncorr", "i7index_qual", "i7index_idx","i7index_ed", "i7index_corr", "i7index_frameshift", 
+                                fieldnames=["read_id", "pattern", "i7index_uncorr", "i7index_qual", "i7index_idx","i7index_ed", "i7index_corr", "i7index_frameshift", 
                                             "i5index_uncorr", "i5index_qual", "i5index_idx", "i5index_ed", "i5index_corr", "i5index_frameshift", "wellid"], 
                                 delimiter='\t')
         writer.writeheader()
@@ -108,6 +108,7 @@ def process_barcodes(uncorr_bc_file, output_dir, i7_whitelist, i5_whitelist,
             
             bc_corr = {
                 'read_id': id,
+                'pattern': pattern,
                 'i7index_uncorr': i7_uncorr,
                 'i7index_qual': i7_qual,
                 'i7index_idx': i7_idx,
@@ -164,6 +165,6 @@ if __name__ == "__main__":
     parser.add_argument("-ed", "--max_ed", type=int, default=2, help="Maximum edit distance for barcode correction")
     parser.add_argument("-di", "--min_ed_diff", type=int, default=1, help="Minimum edit distance between first hits and second hits")
     parser.add_argument("-f", "--flank", type=int, default=5, help="Extracted extra bases flanking the barcode position")
-    parser.add_argument("-l", "--bc_length", type=int, default=10, help="barcode length")
+    parser.add_argument("-bl", "--bc_length", type=int, default=10, help="barcode length")
     args = parser.parse_args()
     main(args)
