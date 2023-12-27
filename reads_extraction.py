@@ -250,18 +250,29 @@ def write_barcode_batch(bc_batch, bc_output, write_header=False):
             writer.writeheader()
         writer.writerows(bc_batch)
 
+def write_umi_batch(umi_batch, umi_output, write_header=False):
+    with open(umi_output, 'a', newline='') as file:
+        writer = csv.DictWriter(file, 
+                                fieldnames=["read_id", "pattern", "umi_uncorr", "umi_uncorr_qual"], 
+                                delimiter='\t')
+        if write_header:
+            writer.writeheader()
+        writer.writerows(umi_batch)
 
-def extract_reads(input_bam, valid_pairs_dict, output_dir, flank=5, bc_length=10, batch_size=1000):
+
+def extract_reads(input_bam, valid_pairs_dict, output_dir, flank=5, bc_length=10, umi_length=14, batch_size=1000):
     """Extract reads from the bam file with batch writing."""
     print("Extracting reads...")
     n_reads = 0
     output_bam = os.path.join(output_dir, "extracted_reads.bam")
     bc_tsv = os.path.join(output_dir, "barcodes.tsv")
+    umi_tsv = os.path.join(output_dir, "umis.tsv")
 
     with pysam.AlignmentFile(input_bam, "rb", check_sq=False) as bamfile, \
         pysam.AlignmentFile(output_bam, "wb", header=bamfile.header) as outfile:
             reads_batch = []
             bc_batch = []
+            umi_batch = []
             
             for read in bamfile.fetch(until_eof=True):
                 query_name = read.query_name
@@ -276,16 +287,22 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, flank=5, bc_length=10
                             i7_end = i7 - 1 + flank
                             i5_start = i5 - flank
                             i5_end = min(i5 + 1 + bc_length + flank, read.rlen)
+                            umi_start = max(0, end - umi_length - flank)
+                            umi_end = min(end + flank, read.rlen)
                         if pattern == '-':
                             i5_start = max(i5 - 1 - bc_length - flank, 0)
                             i5_end = i5 - 1 + flank
                             i7_start = i7 - flank
-                            i7_end = min(i7 + 1 + bc_length + flank, read.rlen)                        
+                            i7_end = min(i7 + 1 + bc_length + flank, read.rlen)
+                            umi_start = max(start - flank, 0)
+                            umi_end = min(start + umi_length + flank, read.rlen)
                             
                         i7_seq = read.seq[i7_start:i7_end] 
                         i7_qual = read.qual[i7_start:i7_end]
                         i5_seq = read.seq[i5_start:i5_end]
                         i5_qual = read.qual[i5_start:i5_end]
+                        umi_seq = read.seq[umi_start:umi_end]
+                        umi_qual = read.qual[umi_start:umi_end]
                         
                         # output barcodes table for correction
                         barcode_info = {
@@ -297,6 +314,14 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, flank=5, bc_length=10
                             "i5index_uncorr_qual": i5_qual
                             }                        
                         bc_batch.append(barcode_info)
+                        
+                        umi_info = {
+                            "read_id": query_id,
+                            "pattern": pattern,
+                            "umi_uncorr": umi_seq,
+                            "umi_uncorr_qual": umi_qual
+                            }                        
+                        umi_batch.append(umi_info)                        
 
                         new_read = pysam.AlignedSegment()
                         new_read.query_name = query_id
@@ -315,12 +340,15 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, flank=5, bc_length=10
                             reads_batch.clear()
                             write_barcode_batch(bc_batch, bc_tsv, write_header=(n_reads == batch_size))
                             bc_batch.clear()
+                            write_umi_batch(umi_batch, umi_tsv, write_header=(n_reads == batch_size))
+                            umi_batch.clear()
                             
             # Write remaining reads in the last batch
             for b_read in reads_batch:
                 outfile.write(b_read)
             if bc_batch:
                 write_barcode_batch(bc_batch, bc_tsv)
+                write_umi_batch(umi_batch, umi_tsv)
 
     print(f"{n_reads} reads with pattern have been extracted.")
 
@@ -390,6 +418,7 @@ def main(args):
         output_dir=args.output_dir,
         flank = args.flank,
         bc_length = args.bc_length,
+        umi_length=args.umi_length,
         batch_size = args.batch_size
     )
 
@@ -413,6 +442,7 @@ if __name__ == "__main__":
     parser.add_argument("-t", "--threads", type=int, default=1, help="Number of threads of vsearch")
     parser.add_argument("-f", "--flank", type=int, default=5, help="Extra nucleotides to extract at two ends of the reads")
     parser.add_argument("-bl", "--bc_length", type=int, default=10, help="Length of the barcodes")
+    parser.add_argument("-ul", "--umi_length", type=int, default=14, help="Length of the UMIs to be extracted")
     parser.add_argument("-s", "--batch_size", type=int, default=1000, help="Batch size for writing output files")
     args = parser.parse_args()
     main(args)
