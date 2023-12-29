@@ -52,11 +52,11 @@ def extract_umi(input_file, output_file, umi_len, ts_pattern, max_ed, flank, bat
             if match:
                 start, end = match.start(), match.end()
                 if strand == '+':
-                    umi = sequence[end:end + umi_len]
-                    umi_qual = qual[end:end + umi_len]
+                    umi = sequence[end:end + umi_len] if end+umi_len<=len(sequence) else sequence[end:len(sequence)]
+                    umi_qual = qual[end:end + umi_len] if end+umi_len<=len(sequence) else qual[end:len(sequence)]
                 else:
-                    umi = sequence[start - umi_len:start]
-                    umi_qual = qual[start - umi_len:start]
+                    umi = sequence[start - umi_len:start] if start>=umi_len else sequence[0:start]
+                    umi_qual = qual[start - umi_len:start] if start>=umi_len else qual[0:start]
             else:
                 umi, umi_qual = '', ''
 
