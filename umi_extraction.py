@@ -38,29 +38,22 @@ def extract_umi(input_file, output_file, umi_len, ts_pattern, max_ed, flank, bat
             qual = row['umi_uncorr_qual']
 
             if strand == '+':
-                pattern = ts_pattern[::-1].translate(complement_trans)
-                expected_start = flank
-                expected_end = flank + len(ts_pattern)
-            else:
-                pattern = ts_pattern
-                expected_start = flank + umi_len
-                expected_end = flank + umi_len + len(ts_pattern)
+                sequence = sequence[::-1].translate(complement_trans)
+                qual = qual[::-1]
 
-            pattern = pattern.replace('W', '[AT]')
+            pattern = ts_pattern.replace('W', '[AT]')
+            expected_start = flank + umi_len
+            expected_end = flank + umi_len + len(ts_pattern)
             match = find_best_match(pattern, sequence, max_ed, expected_start, expected_end)
 
             if match:
                 start, end = match.start(), match.end()
-                if strand == '+':
-                    umi = sequence[end:end + umi_len] if end+umi_len<=len(sequence) else sequence[end:len(sequence)]
-                    umi_qual = qual[end:end + umi_len] if end+umi_len<=len(sequence) else qual[end:len(sequence)]
-                else:
-                    umi = sequence[start - umi_len:start] if start>=umi_len else sequence[0:start]
-                    umi_qual = qual[start - umi_len:start] if start>=umi_len else qual[0:start]
+                umi = sequence[start - umi_len:start] if start>=umi_len else sequence[0:start]
+                umi_qual = qual[start - umi_len:start] if start>=umi_len else qual[0:start]
             else:
                 umi, umi_qual = '', ''
 
-            batch.append({'read_id': row['read_id'], 'pattern': strand, 'umi': umi, 'umi_qual': umi_qual})
+            batch.append({'read_id': row['read_id'], 'umi': umi, 'umi_qual': umi_qual})
             if len(batch) >= batch_size:
                 writer.writerows(batch)
                 batch.clear()
@@ -83,11 +76,11 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process sequencing reads to extract UMIs.")
     parser.add_argument("-i", "--input", required=True, help="Input TSV file with sequencing reads")
-    parser.add_argument("-o", "--output", required=True, help="Output TSV file for extracted UMIs")
+    parser.add_argument("-o", "--output", required=True, help="Output TSV file for extracted and orientated UMIs")
     parser.add_argument("-p", "--ts_pattern", type=str, required=True, help="Template switch oligo pattern")
     parser.add_argument("-ul", "--umi_len", type=int, default=8, help="Length of the UMI")
-    parser.add_argument("-d", "--max_ed", type=int, default=1, help="Maximum edit distance allowed")
-    parser.add_argument("-f", "--flank", type=int, default=5, help="Extra range for expected pattern position")
+    parser.add_argument("-d", "--max_ed", type=int, default=1, help="Maximum edit distance allowed in the pattern oligos")
+    parser.add_argument("-f", "--flank", type=int, default=5, help="Extra range flanking the expected pattern position")
     args = parser.parse_args()
     main(args)
 
