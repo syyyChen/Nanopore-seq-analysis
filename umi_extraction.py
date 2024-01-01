@@ -28,7 +28,7 @@ def find_best_match(pattern, sequence, max_ed, expected_start, expected_end):
 def extract_umi(input_file, output_file, umi_len, ts_pattern, max_ed, flank, batch_size=5000):
     with open(input_file, 'r') as infile, open(output_file, 'w', newline='') as outfile:
         reader = csv.DictReader(infile, delimiter='\t')
-        writer = csv.DictWriter(outfile, fieldnames=['read_id', 'pattern', 'uncorr_umi', 'umi_qual'], delimiter='\t')
+        writer = csv.DictWriter(outfile, fieldnames=['read_id', 'uncorr_umi', 'umi_qual'], delimiter='\t')
         writer.writeheader()
 
         batch = []

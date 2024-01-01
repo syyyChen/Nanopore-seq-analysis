@@ -96,9 +96,9 @@ def cluster(df):
 
     :param df: DataFrame
         Index: gene_cell
-        columns: UR (uncorrected UMI), read_id
+        columns: uncorr_umi, read_id
     :return:
-        DataFrame: The same as df with and additional UB (corrected barcode) column.
+        DataFrame: The same as df with and additional corrected umi column.
     """
     # Monkey-patch the umi-tools clusterer with a modified method
     # using Levenshtein instead of Hamming distance.
@@ -124,9 +124,9 @@ def cluster(df):
 
         return umis.replace(umi_map)
 
-    # UB: corrected UMI tag
-    df["UB"] = df.groupby(
-        ["gene_cell"])["UR"].transform(umi_tools_cluster)
+    # umi: corrected UMI tag
+    df["umi"] = df.groupby(
+        ["gene_cell"])["uncorr_umi"].transform(umi_tools_cluster)
     df.set_index('read_id', drop=True, inplace=True)
 
 
@@ -135,9 +135,9 @@ def process_records(df, ref_interval):
 
     For each read, get the gene, barcode and unorrecdted UMI.
     Use that to cluster UMIs to correct errors.
-    Write a TSV file including the input column + a corrected UMI tag (UB) column.
+    Write a TSV file including the input column + a corrected UMI tag column.
 
-    :param df: DataFrame with columns: read_id, UR, gene
+    :param df: DataFrame with columns: read_id, uncorr_umi, gene
     :type df: pd.DataFrame
     """
     df_no_gene = df.loc[df.gene == '-']
@@ -155,29 +155,37 @@ def process_records(df, ref_interval):
     df['read_id'] = df.index
     df.set_index('gene_cell', inplace=True, drop=True)
     cluster(df)
-    # Reset unassigned genes to '-'
-    df.loc[df.no_gene, 'gene'] = '-'
+    # Reset unassigned genes to empty
+    df.loc[df.no_gene, 'gene'] = ''
     df.drop(columns='no_gene', inplace=True)
 
 
 def main(args):
-    """Run entry point."""
-    df_tag_feature = pd.read_csv(args.input, sep='\t')
-    df_tag_feature = df_tag_feature.drop_duplicates(subset=['read_id'], keep='first')
-    df_tag_feature.set_index('read_id', drop=True, inplace=True)
+    align_df = pd.read_csv(
+        args.align_bed,
+        sep='\t',
+        header=None,
+        names=["chr", "start", "end", "read_id", "align_qual", "strand"]
+    )
+    
+    tags_df = pd.read_csv(args.tags_tsv, sep='\t')
+    tags_df = tags_df.merge(align_df, how="outer")
+    
+    feature_df = tags_df.dropna(subset=['chr', 'wellid', 'uncorr_umi'])
+    feature_df.set_index('read_id', drop=True, inplace=True)
+    feature_df['gene'] = feature_df['gene'].fillna('-')
 
-    # Only process reads with a corrected barcode and uncorrected UMI
-    df_tag_feature = df_tag_feature.loc[
-        (df_tag_feature.wellid != '-') & (df_tag_feature.UR != '-')]
-
-    # Process the tag and feature df by adding UB tags inplace.
-    process_records(df_tag_feature, ref_interval=args.interval)
-    df_tag_feature.to_csv(args.output, sep='\t', index=True)
+    # Process the tag and feature df by adding corrected umi tags inplace.
+    process_records(feature_df, ref_interval=args.interval)
+    umi_df = feature_df.reset_index().rename(columns={'index': 'read_id'})[['read_id', 'umi']]
+    tags_df = tags_df.merge(umi_df, how='outer')
+    tags_df.to_csv(args.output, sep='\t', index=False)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="UMI correction")
-    parser.add_argument("-i", "--input", required=True, help="Input tsv file path")
+    parser.add_argument("-b", "--align_bed", required=True, help="Input bed file recording primary alignments")
+    parser.add_argument("-f", "--tags_tsv", required=True, help="Input tsv file recording merged tags and uncorrected umis")
     parser.add_argument("-o", "--output", required=True, help="Output tsv file path")
     parser.add_argument("-iv", "--interval", type=int, default=1000, help="interval used for assign temporary genome regions")
     args = parser.parse_args()

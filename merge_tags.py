@@ -29,7 +29,7 @@ def process_umis(umis, qual_threshold):
         .otherwise(pl.lit(None))
         .alias("uncorr_umi")
     )
-    umi_df = umi_df.select(pl.col(["read_id", "pattern", "uncorr_umi"]))
+    umi_df = umi_df.select(pl.col(["read_id", "uncorr_umi"]))
     return umi_df
 
 
@@ -44,7 +44,7 @@ def main(args):
     bc_df = pl.read_csv(source=args.barcodes, 
             separator='\t', 
             has_header=True,
-            columns=["read_id", "wellid"])
+            columns=["read_id", "wellid", "pattern"])
     bc_df = bc_df.with_columns(pl.col("wellid").map_elements(lambda x: None if x == "Unsure" else x))
     
     umi_df = process_umis(
