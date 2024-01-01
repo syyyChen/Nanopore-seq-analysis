@@ -19,7 +19,9 @@ ref_chrom_sizes="${ref_dir}/chr_sizes"
 # prepare fastq file for minimap2
 tmp_fastq="/tmp/tmp.fastq"
 mapped_bam="${output_dir}/mapped.bam"
-mapping_bed="${output_dir}/mapping.bed"
+primary_align="${output_dir}/primary_alignments.bam"
+spt_align="${output_dir}/supplementary_alignments.bam"
+primary_bed="${output_dir}/primary_alignments.bed"
 
 samtools fastq -@ $thread $input_bam > $tmp_fastq
 
@@ -31,8 +33,10 @@ minimap2 -ax splice -uf --secondary=no --MD -t $thread --junc-bed $ref_genes_bed
 rm $tmp_fastq
 
 # Index the sorted BAM file
-samtools index $mapped_bam
-bedtools bamtobed -i $mapped_bam > $mapping_bed
+samtools -b -F 0x800 $mapped_bam > $primary_align
+samtools -b -f 0x800 $mapped_bam > $spt_align
+samtools index $primary_align
+bedtools bamtobed -i $primary_align > $primary_bed
 
 # assign genes to reads
 featureCounts -a $ref_genes_gtf -L -o "${output_dir}/gene_assigned" -R CORE -g gene_name $mapped_bam
