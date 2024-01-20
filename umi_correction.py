@@ -96,7 +96,7 @@ def cluster(df):
 
     :param df: DataFrame
         Index: gene_cell
-        columns: uncorr_umi, read_id
+        columns: UR, read_id
     :return:
         DataFrame: The same as df with and additional corrected umi column.
     """
@@ -124,9 +124,9 @@ def cluster(df):
 
         return umis.replace(umi_map)
 
-    # umi: corrected UMI tag
-    df["umi"] = df.groupby(
-        ["gene_cell"])["uncorr_umi"].transform(umi_tools_cluster)
+    # UB: corrected UMI tag
+    df["UB"] = df.groupby(
+        ["gene_cell"])["UR"].transform(umi_tools_cluster)
     df.set_index('read_id', drop=True, inplace=True)
 
 
@@ -137,7 +137,7 @@ def process_records(df, ref_interval):
     Use that to cluster UMIs to correct errors.
     Write a TSV file including the input column + a corrected UMI tag column.
 
-    :param df: DataFrame with columns: read_id, uncorr_umi, gene
+    :param df: DataFrame with columns: read_id, UR, gene
     :type df: pd.DataFrame
     """
     df_no_gene = df.loc[df.gene == '-']
@@ -171,13 +171,13 @@ def main(args):
     tags_df = pd.read_csv(args.tags_tsv, sep='\t')
     tags_df = tags_df.merge(align_df, how="outer")
     
-    feature_df = tags_df.dropna(subset=['chr', 'wellid', 'uncorr_umi'])
+    feature_df = tags_df.dropna(subset=['chr', 'wellid', 'UR'])
     feature_df.set_index('read_id', drop=True, inplace=True)
     feature_df['gene'] = feature_df['gene'].fillna('-')
 
     # Process the tag and feature df by adding corrected umi tags inplace.
     process_records(feature_df, ref_interval=args.interval)
-    umi_df = feature_df.reset_index().rename(columns={'index': 'read_id'})[['read_id', 'umi']]
+    umi_df = feature_df.reset_index().rename(columns={'index': 'read_id'})[['read_id', 'UB']]
     tags_df = tags_df.merge(umi_df, how='outer')
     tags_df.to_csv(args.output, sep='\t', index=False)
 
