@@ -37,7 +37,7 @@ def extract_umi(input_file, output_file, umi_len, ts_pattern, max_ed, flank, bat
             sequence = row['umi_uncorr']
             qual = row['umi_uncorr_qual']
 
-            if strand == '+':
+            if strand == '-':
                 sequence = sequence[::-1].translate(complement_trans)
                 qual = qual[::-1]
 

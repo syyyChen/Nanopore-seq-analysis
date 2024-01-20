@@ -311,6 +311,9 @@ def extract_reads(input_bam, valid_pairs_dict, output_dir, flank=5, bc_length=10
                         new_read.flag = read.flag
                         new_read.seq = read.seq[start:end]
                         new_read.qual = read.qual[start:end]
+                        if pattern == '-':
+                            new_read.seq = new_read.seq[::-1].translate(complement_trans)
+                            new_read.qual = new_read.qual[::-1]
                         new_read.tags = read.tags 
                         new_read.set_tag('mp', multi_reads, 'i')
                         new_read.set_tag('pn', pattern, 'Z')
