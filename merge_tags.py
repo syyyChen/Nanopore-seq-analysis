@@ -12,7 +12,7 @@ def process_umis(umis, qual_threshold):
         has_header=True
         )
     umi_df = umi_df.with_columns(
-        pl.col("umi_qual")
+        pl.col("UR_qual")
         .map_elements(ascii_to_phred)
         .alias("phred_scores")
         )
@@ -25,11 +25,11 @@ def process_umis(umis, qual_threshold):
         )
     umi_df = umi_df.with_columns(
         pl.when(pl.col("qualified"))
-        .then(pl.col("uncorr_umi"))
+        .then(pl.col("UR"))
         .otherwise(pl.lit(None))
-        .alias("uncorr_umi")
+        .alias("UR")
     )
-    umi_df = umi_df.select(pl.col(["read_id", "uncorr_umi"]))
+    umi_df = umi_df.select(pl.col(["read_id", "UR"]))
     return umi_df
 
 

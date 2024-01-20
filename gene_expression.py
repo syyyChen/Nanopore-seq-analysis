@@ -8,11 +8,11 @@ def process_fetures(tsv):
         source=tsv, 
         separator='\t', 
         has_header=True,
-        columns=["gene", "wellid", "umi"]
+        columns=["gene", "wellid", "UB"]
     )
-    dfe = dfe.group_by(["gene","wellid"]).agg(pl.col("umi").n_unique())
+    dfe = dfe.group_by(["gene","wellid"]).agg(pl.col("UB").n_unique())
     dfe = dfe.pivot(
-    values="umi",
+    values="UB",
     index="gene",
     columns="wellid"
     )
@@ -26,14 +26,14 @@ def create_meta(tsv):
         source=tsv, 
         separator='\t', 
         has_header=True,
-        columns=["assign_status", "wellid", "pattern", "umi"]
+        columns=["assign_status", "wellid", "pattern", "UB"]
     )
     meta = df.group_by('wellid').agg([
             pl.count().alias("total_reads"),
             pl.col("assign_status").filter(pl.col("assign_status") != "Unassigned_Unmapped").count().alias("mapped"),
             pl.col("assign_status").filter(pl.col("assign_status") == "Assigned").count().alias("assigned"),
             pl.col("pattern").filter(pl.col("pattern") == "+").count().alias("positive_pattern"),
-            pl.col("umi").filter(pl.col("umi").is_not_null()).count().alias("qualified_umi")
+            pl.col("UB").filter(pl.col("UB").is_not_null()).count().alias("qualified_umi")
             ])
     meta = meta.with_columns([
             (pl.col("mapped") / pl.col("total_reads") * 100).alias("pct_mapped_reads"),
