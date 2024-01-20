@@ -39,7 +39,7 @@ samtools index $primary_align
 bedtools bamtobed -i $primary_align > $primary_bed
 
 # assign genes to reads
-featureCounts -a $ref_genes_gtf -L -o "${output_dir}/gene_assigned" -R CORE -g gene_name $mapped_bam
+featureCounts -a $ref_genes_gtf -L -o "${output_dir}/gene_assigned" -R CORE -g gene_name $primary_align
 
 
 #featurecounts reports error for extreme long reads output in bam format
